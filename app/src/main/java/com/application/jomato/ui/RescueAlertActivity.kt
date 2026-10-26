@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.application.jomato.entity.zomato.rescue.FoodRescueAlerter
 import com.application.jomato.entity.zomato.rescue.RescueAlertPlayer
+import com.application.jomato.entity.zomato.rescue.RescueHistoryStore
 import com.application.jomato.entity.zomato.service.FoodRescueService
 
 /**
@@ -64,7 +65,7 @@ import com.application.jomato.entity.zomato.service.FoodRescueService
 class RescueAlertActivity : ComponentActivity() {
 
     private val handler = Handler(Looper.getMainLooper())
-    private val autoDismissRunnable = Runnable { dismiss(openZomato = false) }
+    private val autoDismissRunnable = Runnable { dismiss(openZomato = false, userInitiated = false) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,8 +102,15 @@ class RescueAlertActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun dismiss(openZomato: Boolean) {
+    private fun dismiss(openZomato: Boolean, userInitiated: Boolean = true) {
         handler.removeCallbacks(autoDismissRunnable)
+
+        // Only a real interaction counts as "opened" in the history. Being woken up by
+        // the full-screen intent, or the 60s auto-dismiss, does not.
+        if (userInitiated) {
+            RescueHistoryStore.markOpened(this, intent?.getStringExtra(FoodRescueAlerter.EXTRA_EVENT_ID))
+        }
+
         FoodRescueAlerter.dismiss(this)
 
         if (openZomato) {

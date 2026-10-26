@@ -9,10 +9,9 @@ import android.graphics.Color
 import android.media.AudioAttributes
 import android.net.Uri
 import androidx.core.app.NotificationCompat
-import com.application.jomato.MainActivity
 import com.application.jomato.Prefs
 import com.application.jomato.R
-import com.application.jomato.entity.zomato.service.FoodRescueService
+import com.application.jomato.ui.AlertOpenActivity
 import com.application.jomato.ui.RescueAlertActivity
 import com.application.jomato.utils.FileLogger
 
@@ -32,6 +31,9 @@ object FoodRescueAlerter {
     private const val TAG = "FoodRescueAlerter"
 
     const val ALERT_NOTIFICATION_ID = 1002
+
+    /** Extra carrying the history entry id through the alert intents. */
+    const val EXTRA_EVENT_ID = "com.application.jomato.ALERT_EVENT_ID"
 
     const val CHANNEL_ID_RING = "jomato_alerts_channel_v3_ring"
     const val CHANNEL_ID_SOUND = "jomato_alerts_channel_v3_sound"
@@ -108,7 +110,7 @@ object FoodRescueAlerter {
     }
 
     /** Post the alert notification and, for the ALARM style, start the ring + full-screen intent. */
-    fun post(context: Context) {
+    fun post(context: Context, eventId: String? = null) {
         val app = context.applicationContext
         ensureChannels(app)
 
@@ -122,15 +124,11 @@ object FoodRescueAlerter {
         val notificationManager =
             app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        var openApp = app.packageManager.getLaunchIntentForPackage(FoodRescueService.TARGET_PACKAGE)
-        if (openApp == null) {
-            openApp = Intent(app, MainActivity::class.java)
-        }
-        openApp.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val openPendingIntent = PendingIntent.getActivity(
             app,
             0,
-            openApp,
+            Intent(app, AlertOpenActivity::class.java)
+                .putExtra(EXTRA_EVENT_ID, eventId),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
@@ -145,6 +143,7 @@ object FoodRescueAlerter {
             app,
             2,
             Intent(app, RescueAlertActivity::class.java)
+                .putExtra(EXTRA_EVENT_ID, eventId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
@@ -188,7 +187,7 @@ object FoodRescueAlerter {
      * app is in the foreground, opens the takeover screen directly so the user can see it.
      */
     fun test(context: Context) {
-        post(context)
+        post(context, null)
         try {
             context.startActivity(
                 Intent(context, RescueAlertActivity::class.java)

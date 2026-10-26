@@ -49,7 +49,8 @@ private fun formatRupee(amount: Double): String {
 @Composable
 fun RescueActiveView(
     state: FoodRescueState,
-    onStopClick: () -> Unit
+    onStopClick: () -> Unit,
+    onOpenHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val claimedOrders = remember { ZomatoManager.getFrClaimedOrders(context) }
@@ -72,7 +73,27 @@ fun RescueActiveView(
 
         AlertStyleRow(onClick = { showAlertDialog = true })
 
-        Spacer(modifier = Modifier.height(12.dp))
+        TextButton(
+            onClick = onOpenHistory,
+            modifier = Modifier.align(Alignment.End),
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Text(
+                text = "RESCUE HISTORY",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp,
+                color = JomatoTheme.Brand
+            )
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = JomatoTheme.Brand,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         Column(
             modifier = Modifier

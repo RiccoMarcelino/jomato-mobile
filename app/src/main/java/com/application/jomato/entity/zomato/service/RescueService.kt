@@ -12,6 +12,8 @@ import com.application.jomato.entity.zomato.ZomatoManager
 import com.application.jomato.entity.zomato.api.ApiClient
 import com.application.jomato.entity.zomato.api.FoodRescueConf
 import com.application.jomato.entity.zomato.rescue.FoodRescueAlerter
+import com.application.jomato.entity.zomato.rescue.RescueEventParser
+import com.application.jomato.entity.zomato.rescue.RescueHistoryStore
 import com.application.jomato.utils.AnalyticsManager
 import com.application.jomato.utils.FileLogger
 import kotlinx.coroutines.*
@@ -383,7 +385,7 @@ class FoodRescueService : Service() {
             }
 
             when (eventType) {
-                "order_cancelled" -> handleOrderCancelled(msgId)
+                "order_cancelled" -> handleOrderCancelled(msgId, root)
                 "order_claimed" -> handleOrderClaimed(root)
                 else -> return
             }
@@ -393,16 +395,24 @@ class FoodRescueService : Service() {
         }
     }
 
-    private fun handleOrderCancelled(msgId: String?) {
+    private fun handleOrderCancelled(msgId: String?, root: JsonObject) {
         FileLogger.log(this, "Logic", ">>> NEW FRESH ORDER CANCELLED ($msgId) <<<")
+
+        val parsed = RescueEventParser.parse(root)
+        val eventTime = parsed.eventTime ?: System.currentTimeMillis()
+        val eventId = msgId ?: "evt-$eventTime"
 
         val lastNotificationTime = ZomatoManager.getLastNotificationTime(this)
         val now = System.currentTimeMillis()
         val timeSinceLast = now - lastNotificationTime
+        val shouldNotify = timeSinceLast >= NOTIFICATION_COOLDOWN_MS
 
-        if (timeSinceLast >= NOTIFICATION_COOLDOWN_MS) {
+        // Record every deal, including the ones the cooldown keeps quiet.
+        RescueHistoryStore.recordObserved(this, eventId, eventTime, shouldNotify, parsed)
+
+        if (shouldNotify) {
             FileLogger.log(this, "Logic", "Cooldown expired ($timeSinceLast > $NOTIFICATION_COOLDOWN_MS). Sending Notification.")
-            FoodRescueAlerter.post(this)
+            FoodRescueAlerter.post(this, eventId)
             ZomatoManager.saveLastNotification(this, now)
         } else {
             val remaining = (NOTIFICATION_COOLDOWN_MS - timeSinceLast) / 1000
@@ -441,6 +451,7 @@ class FoodRescueService : Service() {
         if (orderDetails != null) {
             FileLogger.log(this, "Logic", "Order $identifier claimed by our user. Cart: ${orderDetails.cartTotal}, Paid: ${orderDetails.paidAmount}")
             ZomatoManager.saveOrderClaimedState(this, identifier, orderDetails)
+            RescueHistoryStore.markClaimed(this, identifier, orderDetails)
             if (orderDetails.cartTotal != null && orderDetails.paidAmount != null) {
                 AnalyticsManager.pingFoodRescue(this, identifier, orderDetails.cartTotal, orderDetails.paidAmount)
             } else {

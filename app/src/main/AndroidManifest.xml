@@ -41,6 +41,14 @@
         </activity>
 
         <activity
+            android:name=".ui.AlertOpenActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
             android:name=".ui.RescueAlertActivity"
             android:exported="false"
             android:excludeFromRecents="true"
@@ -53,6 +61,7 @@
         <receiver
             android:name=".entity.zomato.rescue.AlertDismissReceiver"
             android:exported="false" />
+
 
         <service
             android:name=".entity.zomato.service.FoodRescueService"
