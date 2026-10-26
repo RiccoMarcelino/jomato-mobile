@@ -30,6 +30,10 @@ class FoodRescueService : Service() {
     private var isRunning = false
     private var lastConnectedAt: Long = 0L
 
+    /** Consecutive MQTT handshake failures; drives credential refresh. */
+    private var consecutiveConnectFailures = 0
+    private var lastCredentialRefreshAt = 0L
+
     private val dedupDirName = "zomato_dedup"
 
     companion object {
@@ -40,6 +44,12 @@ class FoodRescueService : Service() {
         const val NOTIFICATION_ID = 1001
 
         const val TARGET_PACKAGE = "com.application.zomato"
+
+        // After this many failed MQTT handshakes, fetch fresh channel credentials.
+        const val FAILURES_BEFORE_CREDENTIAL_REFRESH = 2
+
+        // Don't hammer the Zomato API if refreshes keep failing.
+        const val CREDENTIAL_REFRESH_COOLDOWN_MS = 5 * 60 * 1000L
 
         // How long to suppress notifications after one fires.
         // Increase if users report too many alerts back-to-back.
@@ -196,7 +206,7 @@ class FoodRescueService : Service() {
                         }
                         // Zomato-issued channel credentials expire; fall back to a refresh
                         // instead of crashing on a missing config.
-                        val conf = state.essentials.foodRescue
+                        val conf = state.essentials.foodRescue ?: refreshCredentials()
                         if (conf != null) {
                             connectMqtt(conf)
                         } else {
@@ -270,14 +280,70 @@ class FoodRescueService : Service() {
 
             if (mqttClient?.isConnected == true) {
                 lastConnectedAt = System.currentTimeMillis()
+                consecutiveConnectFailures = 0
                 FileLogger.log(this, "MQTT", "Connected. Subscribing...")
                 mqttClient?.subscribe(config.channelName, config.qos)
                 FileLogger.log(this, "MQTT", "Subscribed!")
             }
 
         } catch (e: Exception) {
-            FileLogger.log(this, "MQTT", "Connection failed: ${e.message}")
+            consecutiveConnectFailures++
+            FileLogger.log(this, "MQTT", "Connection failed (attempt $consecutiveConnectFailures): ${e.message}")
+            if (consecutiveConnectFailures >= FAILURES_BEFORE_CREDENTIAL_REFRESH) {
+                refreshCredentials()
+            }
         }
+    }
+
+    /**
+     * Re-fetches tabbed-home so we get a fresh food_rescue channel name + MQTT
+     * credentials. Zomato rotates these; without this the service silently keeps
+     * retrying with dead credentials and the user stops getting alerts.
+     */
+    private suspend fun refreshCredentials(): FoodRescueConf? {
+        val now = System.currentTimeMillis()
+        if (now - lastCredentialRefreshAt < CREDENTIAL_REFRESH_COOLDOWN_MS) {
+            FileLogger.log(this, "MQTT", "Credential refresh skipped (cooldown)")
+            return null
+        }
+        lastCredentialRefreshAt = now
+
+        val sessionId = ZomatoManager.getFoodRescueSessionId(this) ?: run {
+            FileLogger.log(this, "MQTT", "Credential refresh skipped: no session")
+            return null
+        }
+        val session = ZomatoManager.getSession(this, sessionId) ?: run {
+            FileLogger.log(this, "MQTT", "Credential refresh skipped: session not found")
+            return null
+        }
+        val state = ZomatoManager.getFoodRescueState(this) ?: run {
+            FileLogger.log(this, "MQTT", "Credential refresh skipped: no rescue state")
+            return null
+        }
+
+        FileLogger.log(this, "MQTT", "Refreshing food-rescue credentials...")
+        val essentials = try {
+            ApiClient.getTabbedHomeEssentials(
+                this,
+                state.location.cellId,
+                state.location.addressId,
+                session.accessToken
+            )
+        } catch (e: Exception) {
+            FileLogger.log(this, "MQTT", "Credential refresh failed: ${e.message}", e)
+            null
+        } ?: return null
+
+        val conf = essentials.foodRescue
+        if (conf == null) {
+            FileLogger.log(this, "MQTT", "Credential refresh returned no food_rescue channel")
+            return null
+        }
+
+        ZomatoManager.updateFoodRescueEssentials(this, essentials)
+        consecutiveConnectFailures = 0
+        FileLogger.log(this, "MQTT", "Credentials refreshed | channel=${conf.channelName}")
+        return conf
     }
 
     private suspend fun handleMqttMessage(message: MqttMessage?) {
