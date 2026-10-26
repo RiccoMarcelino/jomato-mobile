@@ -35,6 +35,7 @@ import com.application.jomato.Prefs
 import com.application.jomato.entity.zomato.ZomatoManager
 import com.application.jomato.entity.zomato.api.OrderDetails
 import com.application.jomato.ui.AlertStyleDialog
+import com.application.jomato.ui.DiagnosticsDialog
 import com.application.jomato.ui.theme.JomatoTheme
 import java.text.NumberFormat
 import java.util.Locale
@@ -57,6 +58,7 @@ fun RescueActiveView(
     val totalSaved = remember { ZomatoManager.getFrTotalSaved(context) }
     val hasClaims = claimedOrders.isNotEmpty()
     var showAlertDialog by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -73,24 +75,42 @@ fun RescueActiveView(
 
         AlertStyleRow(onClick = { showAlertDialog = true })
 
-        TextButton(
-            onClick = onOpenHistory,
-            modifier = Modifier.align(Alignment.End),
-            contentPadding = PaddingValues(0.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "RESCUE HISTORY",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.1.sp,
-                color = JomatoTheme.Brand
-            )
-            Icon(
-                imageVector = Icons.Rounded.ChevronRight,
-                contentDescription = null,
-                tint = JomatoTheme.Brand,
-                modifier = Modifier.size(14.dp)
-            )
+            TextButton(
+                onClick = onOpenHistory,
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    text = "RESCUE HISTORY",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                    color = JomatoTheme.Brand
+                )
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = JomatoTheme.Brand,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            TextButton(
+                onClick = { showDiagnostics = true },
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    text = "DIAGNOSTICS",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                    color = JomatoTheme.TextGray
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -118,6 +138,10 @@ fun RescueActiveView(
 
     if (showAlertDialog) {
         AlertStyleDialog(onDismiss = { showAlertDialog = false })
+    }
+
+    if (showDiagnostics) {
+        DiagnosticsDialog(onDismiss = { showDiagnostics = false })
     }
 }
 

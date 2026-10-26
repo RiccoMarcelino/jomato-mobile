@@ -361,6 +361,11 @@ class FoodRescueService : Service() {
             val json = Json { ignoreUnknownKeys = true }
             val root = json.parseToJsonElement(payload).jsonObject
 
+            // Keep the raw event locally so a payload shape we don't recognise can be
+            // diagnosed from the in-app Diagnostics screen (FileLogger redacts tokens,
+            // phone numbers and OTPs).
+            FileLogger.log(this, "RawEvent", "RAW EVENT: ${payload.take(3000)}")
+
             val eventType = root["data"]?.jsonObject?.get("event_type")?.jsonPrimitive?.content
             val msgId = root["id"]?.jsonPrimitive?.content
 
@@ -399,6 +404,13 @@ class FoodRescueService : Service() {
         FileLogger.log(this, "Logic", ">>> NEW FRESH ORDER CANCELLED ($msgId) <<<")
 
         val parsed = RescueEventParser.parse(root)
+        FileLogger.log(
+            this,
+            "History",
+            "Parsed deal | name=${parsed.restaurantName} id=${parsed.restaurantId} " +
+                "final=${parsed.finalCost} catalog=${parsed.catalogTotal} items=${parsed.items.size} " +
+                "detail=${parsed.hasDetail}"
+        )
         val eventTime = parsed.eventTime ?: System.currentTimeMillis()
         val eventId = msgId ?: "evt-$eventTime"
 

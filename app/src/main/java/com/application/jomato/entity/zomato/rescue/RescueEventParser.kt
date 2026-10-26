@@ -11,28 +11,44 @@ import kotlinx.serialization.json.longOrNull
 /**
  * Best-effort extraction of deal details from a food-rescue MQTT payload.
  *
+ * The exact payload shape is not documented, so this walks the whole event and matches
+ * keys after normalising them (`camelCase`, `snake_case` and `kebab-case` all compare
+ * equal), accepts both numeric and string prices ("₹199", "199.0"), and follows JSON
+ * that Zomato embeds as a string inside a field.
+ *
  * We intentionally do NOT call `food-rescue/create-cart` to enrich every event: that
  * endpoint creates a rescue cart on the user's account, so calling it for deals the
- * user never opened could litter their Zomato cart. If the payload carries the details
- * we use them; otherwise the history shows the deal without a price instead of guessing.
+ * user never opened could litter their Zomato cart.
  */
 object RescueEventParser {
 
-    private const val MAX_DEPTH = 8
+    private const val MAX_DEPTH = 10
+
+    private val lenientJson = Json {
+        isLenient = true
+        ignoreUnknownKeys = true
+    }
+
+    /** camelCase / snake_case / kebab-case -> flat lowercase. */
+    private fun normalize(raw: String): String =
+        raw.lowercase().replace("_", "").replace("-", "").replace(" ", "")
 
     private val NAME_KEYS = setOf(
-        "restaurant_name", "res_name", "resname", "store_name", "outlet_name", "vendor_name"
+        "restaurantname", "resname", "storename", "outletname", "vendorname", "brandname", "merchantname"
     )
-    private val ID_KEYS = setOf("res_id", "restaurant_id", "store_id", "vendor_id")
+    private val ID_KEYS = setOf("resid", "restaurantid", "storeid", "vendorid", "merchantid")
+    private val CONTAINER_KEYS = setOf("restaurant", "store", "outlet", "vendor", "merchant")
     private val CATALOG_KEYS = setOf(
-        "catalog_total_cost", "catalog_total", "cart_total", "total_cost", "mrp"
+        "catalogtotalcost", "catalogtotal", "carttotal", "totalcost", "mrp",
+        "originalcost", "originalprice", "actualprice"
     )
     private val FINAL_KEYS = setOf(
-        "cart_final_cost", "final_cost", "rescue_price", "discounted_price", "offer_price"
+        "cartfinalcost", "finalcost", "rescueprice", "discountedprice", "offerprice",
+        "sellingprice", "payableamount"
     )
-    private val ITEM_LIST_KEYS = setOf("items", "item_list")
-    private val ITEM_NAME_KEYS = setOf("name", "item_name", "title")
-    private val DEEPLINK_KEYS = setOf("deeplink", "deep_link", "action_url", "button_url")
+    private val ITEM_LIST_KEYS = setOf("items", "itemlist", "cartitems", "products", "dishes")
+    private val ITEM_NAME_KEYS = setOf("name", "itemname", "title", "displayname")
+    private val DEEPLINK_KEYS = setOf("deeplink", "deeplinkurl", "actionurl", "buttonurl")
 
     data class Parsed(
         val restaurantName: String? = null,
@@ -42,7 +58,11 @@ object RescueEventParser {
         val items: List<String> = emptyList(),
         val deeplink: String? = null,
         val eventTime: Long? = null
-    )
+    ) {
+        /** True when the event actually told us something worth showing. */
+        val hasDetail: Boolean
+            get() = restaurantName != null || catalogTotal != null || finalCost != null || items.isNotEmpty()
+    }
 
     fun parse(root: JsonObject): Parsed {
         val strings = mutableMapOf<String, String>()
@@ -55,28 +75,48 @@ object RescueEventParser {
             when (element) {
                 is JsonObject -> {
                     for ((rawKey, value) in element) {
-                        val key = rawKey.lowercase()
-                        if (value is JsonPrimitive) {
-                            if (value.isString) {
+                        val key = normalize(rawKey)
+                        when (value) {
+                            is JsonPrimitive -> {
                                 val text = value.content
-                                if (key in NAME_KEYS) strings.putIfAbsent(key, text)
-                                if (key in ID_KEYS) strings.putIfAbsent(key, text)
-                                if (key in DEEPLINK_KEYS && isZomatoLink(text)) {
-                                    if (deeplink == null) deeplink = text
+                                // Some Zomato fields carry a whole JSON document as a string.
+                                if (value.isString && text.length > 2 && text.startsWith("{")) {
+                                    runCatching { lenientJson.parseToJsonElement(text) }
+                                        .getOrNull()
+                                        ?.let { walk(it, depth + 1) }
                                 }
-                            } else {
-                                val number = value.doubleOrNull
+                                if (value.isString) {
+                                    if (key in NAME_KEYS) strings.putIfAbsent(key, text)
+                                    if (key in ID_KEYS) strings.putIfAbsent(key, text)
+                                    if (key in DEEPLINK_KEYS && isZomatoLink(text) && deeplink == null) {
+                                        deeplink = text
+                                    }
+                                }
                                 if (key in CATALOG_KEYS || key in FINAL_KEYS) {
+                                    val number = value.doubleOrNull ?: parsePrice(text)
                                     if (number != null && number > 0) numbers.putIfAbsent(key, number)
                                 }
                             }
-                        } else if (value is JsonArray) {
-                            if (key in ITEM_LIST_KEYS && items.isEmpty()) {
-                                items = parseItems(value)
+                            is JsonArray -> {
+                                if (key in ITEM_LIST_KEYS && items.isEmpty()) {
+                                    items = parseItems(value)
+                                }
+                                value.forEach { walk(it, depth + 1) }
                             }
-                            value.forEach { walk(it, depth + 1) }
-                        } else {
-                            walk(value, depth + 1)
+                            is JsonObject -> {
+                                if (key in CONTAINER_KEYS) {
+                                    (value["name"] as? JsonPrimitive)
+                                        ?.takeIf { it.isString }
+                                        ?.content
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { strings.putIfAbsent("restaurantname", it) }
+                                    (value["id"] as? JsonPrimitive)
+                                        ?.content
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { strings.putIfAbsent("restaurantid", it) }
+                                }
+                                walk(value, depth + 1)
+                            }
                         }
                     }
                 }
@@ -87,19 +127,28 @@ object RescueEventParser {
 
         walk(root, 0)
 
-        fun first(keys: Set<String>): String? = keys.firstNotNullOfOrNull { strings[it] }
-        fun number(keys: Set<String>): Double? = keys.firstNotNullOfOrNull { numbers[it] }
+        fun firstString(keys: Set<String>): String? = keys.firstNotNullOfOrNull { strings[it] }
+        fun firstNumber(keys: Set<String>): Double? = keys.firstNotNullOfOrNull { numbers[it] }
 
         return Parsed(
-            restaurantName = first(NAME_KEYS)?.takeIf { it.isNotBlank() },
-            restaurantId = first(ID_KEYS)?.takeIf { it.isNotBlank() },
-            catalogTotal = number(CATALOG_KEYS),
-            finalCost = number(FINAL_KEYS),
+            restaurantName = firstString(NAME_KEYS)?.takeIf { it.isNotBlank() },
+            restaurantId = firstString(ID_KEYS)?.takeIf { it.isNotBlank() },
+            catalogTotal = firstNumber(CATALOG_KEYS),
+            finalCost = firstNumber(FINAL_KEYS),
             items = items,
             deeplink = deeplink,
             eventTime = findTimestamp(root)
         )
     }
+
+    private fun parsePrice(raw: String): Double? =
+        raw.trim()
+            .removePrefix("₹")
+            .removePrefix("Rs.")
+            .removePrefix("Rs")
+            .replace(",", "")
+            .trim()
+            .toDoubleOrNull()
 
     private fun parseItems(array: JsonArray): List<String> {
         val out = mutableListOf<String>()
@@ -109,10 +158,14 @@ object RescueEventParser {
                     out.add(element.content.trim())
                 }
                 is JsonObject -> {
-                    val name = ITEM_NAME_KEYS.firstNotNullOfOrNull { key ->
-                        (element[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    val name = element.entries.firstNotNullOfOrNull { (key, value) ->
+                        if (normalize(key) in ITEM_NAME_KEYS) {
+                            (value as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+                        } else {
+                            null
+                        }
                     }
-                    if (!name.isNullOrBlank()) out.add(name.trim())
+                    if (name != null) out.add(name.trim())
                 }
                 else -> Unit
             }
