@@ -1,6 +1,10 @@
 package com.application.jomato.entity.zomato.rescue
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -256,12 +261,22 @@ private fun StatCard(label: String, value: String, modifier: Modifier = Modifier
 
 @Composable
 private fun HistoryRow(entry: RescueHistoryEntry, status: DealStatus) {
+    val context = LocalContext.current
+    val deeplink = entry.deeplink
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 10.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(JomatoTheme.SecondaryBg)
+            .then(
+                if (deeplink != null) {
+                    Modifier.clickable { openInZomato(context, deeplink) }
+                } else {
+                    Modifier
+                }
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -274,7 +289,15 @@ private fun HistoryRow(entry: RescueHistoryEntry, status: DealStatus) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            if (deeplink != null) {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInNew,
+                    contentDescription = "Open in Zomato",
+                    tint = JomatoTheme.TextGray,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
             StatusChip(status)
         }
 
@@ -356,6 +379,21 @@ private fun priceLabel(entry: RescueHistoryEntry): String {
             "₹${moneyFormat.format(rescue)} · was ₹${moneyFormat.format(catalog)}"
         rescue != null -> "₹${moneyFormat.format(rescue)}"
         else -> "Price not recorded"
+    }
+}
+
+/**
+ * Re-opening a logged deal is best-effort: Zomato may have taken the link down, in
+ * which case nothing happens rather than a crash.
+ */
+private fun openInZomato(context: Context, deeplink: String) {
+    try {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(deeplink))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: Exception) {
+        // No handler / stale link - the row is informational only.
     }
 }
 
